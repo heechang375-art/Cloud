@@ -4,123 +4,140 @@ import base64
 import time
 
 # 1. 설정 정보
-tenant_id = "c3ef7c629cad4448bd1f84bd32b21dee"
-username = "test06"
-password = "test0606"
+TENANT_ID = "c3ef7c629cad4448bd1f84bd32b21dee"
+USERNAME = "test06"
+PASSWORD = "test0606"
 
-url_auth = "https://api-identity-infrastructure.nhncloudservice.com"
-url_compute = "https://kr1-api-instance-infrastructure.nhncloudservice.com"
-url_network = "https://kr1-api-network-infrastructure.nhncloudservice.com/v2.0"
+# API 엔드포인트 (KR1 평촌 리전)
+URL_AUTH = "https://api-identity-infrastructure.nhncloudservice.com"
+URL_COMPUTE = "https://kr1-api-instance-infrastructure.nhncloudservice.com"
+URL_NETWORK = "https://kr1-api-network-infrastructure.nhncloudservice.com/v2.0"
 
-image_id = "7342b6e2-74d6-4d2c-a65c-90242d1ee218" 
-flavor_id = "a4b6a0f7-aeff-4d78-a8d5-7de9f007012d" 
-key_name = "vm1-key" 
-
-url_auth = "https://api-identity-infrastructure.nhncloudservice.com"
-url_compute = "https://kr1-api-instance-infrastructure.nhncloudservice.com"
-# 네트워크 API 베이스 (v2.0 포함)
-url_net = "https://kr1-api-network-infrastructure.nhncloudservice.com/v2.0"
-
-image_id = "7342b6e2-74d6-4d2c-a65c-90242d1ee218" 
-flavor_id = "a4b6a0f7-aeff-4d78-a8d5-7de9f007012d" 
-key_name = "vm1-key" 
+IMAGE_ID = "7342b6e2-74d6-4d2c-a65c-90242d1ee218" 
+FLAVOR_ID = "a4b6a0f7-aeff-4d78-a8d5-7de9f007012d" 
+KEY_NAME = "vm1-key"
 
 # 2. 토큰 발급
-auth_res = requests.post(f"{url_auth}/v2.0/tokens", 
-                         json={"auth": {"tenantId": tenant_id, "passwordCredentials": {"username": username, "password": password}}})
-auth_res.raise_for_status()
-token = auth_res.json()["access"]["token"]["id"]
-header = {"x-auth-token": token, "content-type": "application/json"}
+def get_token():
+    auth_data = {"auth": {"tenantId": TENANT_ID, "passwordCredentials": {"username": USERNAME, "password": PASSWORD}}}
+    res = requests.post(f"{URL_AUTH}/v2.0/tokens", json=auth_data)
+    res.raise_for_status()
+    return res.json()["access"]["token"]["id"]
 
-# 3. VPC 및 외부망 ID 확보
-vpcs = requests.get(f"{url_network}/vpcs", headers=header).json().get("vpcs", [])
-target_vpc = next((v for v in vpcs if v.get("name") == "secure-auto-vpc-final"), None)
-if not target_vpc:
-    target_vpc = requests.post(f"{url_network}/vpcs", headers=header, json={"vpc": {"name": "secure-auto-vpc-final", "cidrv4": "10.0.0.0/16"}}).json()["vpc"]
-vpc_id = target_vpc["id"]
+TOKEN = get_token()
+HEADER = {"x-auth-token": TOKEN, "content-type": "application/json"}
 
-nets = requests.get(f"{url_network}/networks", headers=header).json()["networks"]
-pub_id = next(n["id"] for n in nets if n.get("router:external"))
+# 3. 네트워크 인프라 구축
+print("🌐 [1/4] 네트워크 인프라 구축 시작...")
 
-# 4. 서브넷 확인 및 생성 (StopIteration 에러 방지)
-sub_res = requests.get(f"{url_network}/vpcsubnets", headers=header).json().get("vpcsubnets", [])
-target_subnet = next((s for s in sub_res if s.get("vpc_id") == vpc_id), None)
+# 3.1 VPC 생성
+vpc = requests.post(f"{URL_NETWORK}/vpcs", headers=HEADER, json={"vpc": {"name": "secure-final-vpc", "cidrv4": "10.0.0.0/16"}}).json()["vpc"]
+vpc_id = vpc["id"]
 
-if not target_subnet:
-    # 서브넷이 없으면 생성
-    sub_payload = {"vpcsubnet": {"name": "auto-sub-final", "vpc_id": vpc_id, "cidr": "10.0.0.0/24"}}
-    target_subnet = requests.post(f"{url_network}/vpcsubnets", headers=header, json=sub_payload).json()["vpcsubnet"]
+# 3.2 외부망 ID 조회
+nets = requests.get(f"{URL_NETWORK}/networks", headers=HEADER).json()["networks"]
+pub_net_id = next(n["id"] for n in nets if n.get("router:external"))
 
-subnet_id = target_subnet["id"]
+# 3.3 서브넷 생성
+subnet = requests.post(f"{URL_NETWORK}/vpcsubnets", headers=HEADER, json={"vpcsubnet": {"name": "secure-final-sub", "vpc_id": vpc_id, "cidr": "10.0.0.0/24"}}).json()["vpcsubnet"]
+subnet_id = subnet["id"]
 
-# 5. 인터넷 게이트웨이 생성 및 기본 라우팅 테이블 설정
-print("🌐 기본 라우팅 테이블에 인터넷 통로 연결 중...")
+# 3.4 인터넷 게이트웨이(IGW) 생성
+igw = requests.post(f"{URL_NETWORK}/internetgateways", headers=HEADER, json={"internetgateway": {"name": "secure-final-igw", "vpc_id": vpc_id, "external_network_id": pub_net_id}}).json()["internetgateway"]
+igw_id = igw["id"]
 
-# 5.1 인터넷 게이트웨이(IGW) 확보
-igw_payload = {"internetgateway": {"name": "auto-igw-final", "vpc_id": vpc_id, "external_network_id": pub_id}}
-igw_res = requests.post(f"{url_network}/internetgateways", headers=header, json=igw_payload)
-if igw_res.status_code == 201:
-    igw_id = igw_res.json()["internetgateway"]["id"]
-else:
-    igw_list = requests.get(f"{url_network}/internetgateways", headers=header).json().get("internetgateways", [])
-    igw_id = next(i["id"] for i in igw_list if i.get("vpc_id") == vpc_id)
+# 3.5 새로 만든 라우팅 테이블을 VPC의 '기본'으로 설정
+print("🛤️ [3/4] 새 라우팅 테이블 생성 및 VPC 기본 테이블로 지정 중...")
 
-# 5.2 [해결] 모든 계층 구조를 뒤져서 기본 라우팅 테이블(vpc-892...) 찾기
-rt_list = requests.get(f"{url_network}/routingtables", headers=header).json().get("routingtables", [])
-target_rt_id = None
+# 1. 라우팅 테이블 생성 (이미 생성 로직이 있다면 rt_id 사용)
+rt_res = requests.post(f"{URL_NETWORK}/routingtables", headers=HEADER, 
+                        json={"routingtable": {"name": "secure-final-rt", "vpc_id": vpc_id}}).json()
+rt_id = rt_res["routingtable"]["id"]
 
-for rt in rt_list:
-    # 가이드(image_bf20c5.png)에 따른 vpcs 리스트 전수 조사
-    vpcs_list = rt.get("vpcs", [])
-    is_my_vpc = False
-    
-    if isinstance(vpcs_list, list):
-        is_my_vpc = any(v.get("id") == vpc_id for v in vpcs_list)
-    elif isinstance(vpcs_list, dict): # 단일 객체인 경우 대비
-        is_my_vpc = vpcs_list.get("id") == vpc_id
-    
-    # 직접 필드도 확인
-    if not is_my_vpc:
-        is_my_vpc = (rt.get("vpc_id") == vpc_id)
+# 2. 인터넷 게이트웨이 연결 및 외부 경로 추가
+requests.put(f"{URL_NETWORK}/routingtables/{rt_id}/attach_gateway", headers=HEADER, json={"gateway_id": igw_id})
+requests.put(f"{URL_NETWORK}/routingtables/{rt_id}", headers=HEADER, 
+             json={"routingtable": {"routes": [{"destination": "0.0.0.0/0", "target_id": igw_id, "target_type": "INTERNET_GATEWAY"}]}})
 
-    # 내 VPC의 테이블이면서 '기본(default)'인 것 선택
-    if is_my_vpc and rt.get("default") is True:
-        target_rt_id = rt["id"]
-        break
+# 3. [핵심] 가이드에서 찾아내신 API: 이 테이블을 VPC의 '기본'으로 지정
+# 이 명령을 내리면 vpc-3d814a... 대신 우리가 만든 테이블이 '기본'이 됩니다.
+requests.put(f"{URL_NETWORK}/routingtables/{rt_id}/set_as_default", headers=HEADER)
 
-# 5.3 게이트웨이 연결 및 경로 추가
-if target_rt_id:
-    print(f"✅ 기본 라우팅 테이블 발견: {target_rt_id}")
-    # IGW 물리적 결합
-    requests.put(f"{url_network}/routingtables/{target_rt_id}/attach_gateway", 
-                 headers=header, json={"gateway_id": igw_id})
-    # 외부망 경로(0.0.0.0/0) 기입
-    requests.put(f"{url_network}/routingtables/{target_rt_id}", headers=header, 
-                 json={"routingtable": {"routes": [{"destination": "0.0.0.0/0", "target_id": igw_id, "target_type": "INTERNET_GATEWAY"}]}})
-    print("🚀 기본 라우팅 테이블에 외부 통로 개설 완료!")
-else:
-    print("❌ 기본 라우팅 테이블을 끝내 찾지 못했습니다. VPC ID 일치 여부를 확인하세요.")
-    exit()
+# 4. 서브넷이 새로운 '기본' 설정을 즉시 반영하도록 업데이트
+requests.put(f"{URL_NETWORK}/vpcsubnets/{subnet_id}", headers=HEADER, json={"vpcsubnet": {"routingtable_id": rt_id}})
+
+print(f"✅ 'secure-final-rt'({rt_id})가 VPC의 새로운 기본 라우팅 테이블로 설정되었습니다.")
         
-# 6. 보안 그룹(22, 80) 및 User Data (Nginx + 백업)
-sgs = requests.get(f"{url_network}/security-groups", headers=header).json()["security_groups"]
-sg_id = next(sg["id"] for sg in sgs if sg["name"] == "default")
-for port in [22, 80]:
-    requests.post(f"{url_network}/security-group-rules", headers=header, 
-                  json={"security_group_rule": {"security_group_id": sg_id, "direction": "ingress", "protocol": "tcp", "port_range_min": port, "port_range_max": port, "remote_ip_prefix": "0.0.0.0/0"}})
+# 4. 보안 그룹 생성 (22, 80 포트)
+print("🔒 [2/4] 보안 그룹 생성 및 규칙 설정 중...")
+sg = requests.post(f"{URL_NETWORK}/security-groups", headers=HEADER, 
+                   json={"security_group": {"name": "secure-web-sg"}}).json()["security_group"]
+sg_id = sg["id"]
 
-user_script = """#!/bin/bash
+for port in [22, 80]:
+    requests.post(f"{URL_NETWORK}/security-group-rules", headers=HEADER, 
+                  json={"security_group_rule": {"security_group_id": sg_id, "direction": "ingress", 
+                                                "protocol": "tcp", "port_range_min": port, "port_range_max": port, "remote_ip_prefix": "0.0.0.0/0"}})
+
+# 5. 사용자 데이터(Cloud-Init 스크립트) - 요청하신 sudo 백업 로직 전체 포함
+user_script = r"""#!/bin/bash
+# Nginx 설치 및 설정
 apt-get update -y && apt-get install nginx -y
 systemctl start nginx && systemctl enable nginx
-echo "<h1>NHN Cloud Web Server - Deployment Success</h1>" > /var/www/html/index.html
+echo "<h1>NHN Cloud Web Server - Advanced Backup Script Deployed</h1>" > /var/www/html/index.html
+
+# ubuntu 사용자의 .bashrc에 고도화된 sudo 백업 함수 삽입
 cat << 'EOF' >> /home/ubuntu/.bashrc
+
+# sudo로 편집기/sed/awk 실행 시 자동 백업 함수
 sudo() {
     local cmd="$1"
-    local editors=("vi" "vim" "nano")
+    local args=("${@:2}")
+    local target_file=""
+    local backup_needed=false
+    local editors=("vi" "vim" "nano" "gedit" "nvim")
+
+    # 1. 편집기 대응
     if [[ " ${editors[@]} " =~ " ${cmd} " ]]; then
-        local file="${@: -1}"
-        [ -f "$file" ] && mkdir -p /var/tmp/backups && cp -p "$file" "/var/tmp/backups/$(basename $file)_$(date +%Y%m%d_%H%M%S).bak"
+        target_file="${@: -1}"
+        [ -f "$target_file" ] && backup_needed=true
+
+    # 2. sed 대응 (-i 옵션 존재 시)
+    elif [[ "$cmd" == "sed" ]]; then
+        if [[ "$*" == *"-i"* ]]; then
+            for arg in "${args[@]}"; do
+                if [[ -f "$arg" ]]; then target_file="$arg"; backup_needed=true; break; fi
+            done
+        fi
+
+    # 3. awk 대응
+    elif [[ "$cmd" == "awk" ]]; then
+        if [[ "$*" == *"-i"* && "$*" == *"inplace"* ]] || [[ "$*" == *">"* ]]; then
+            for arg in "${args[@]}"; do
+                if [[ "$arg" != -* && -f "$arg" ]]; then
+                    target_file="$arg"
+                    backup_needed=true
+                    break
+                fi
+            done
+        fi
     fi
+
+    # 4. 백업 실행
+    if [ "$backup_needed" = true ] && [ -n "$target_file" ]; then
+        local backup_dir="/var/tmp/sudo_backups"
+        local timestamp=$(date +%Y%m%d_%H%M%S)
+        local filename=$(basename "$target_file")
+        
+        command sudo mkdir -p "$backup_dir"
+        command sudo chmod 733 "$backup_dir"
+        
+        command sudo cp -p "$target_file" "$backup_dir/${filename}_${timestamp}.bak"
+        echo "📂 [Backup] '$target_file' 이(가) 안전하게 백업되었습니다."
+        echo "   ㄴ 경로: $backup_dir/${filename}_${timestamp}.bak"
+    fi
+
+    # 5. 원본 명령어 실행
     command sudo "$@"
 }
 EOF
@@ -128,66 +145,52 @@ chown ubuntu:ubuntu /home/ubuntu/.bashrc
 """
 encoded_user_data = base64.b64encode(user_script.encode()).decode()
 
-# 6. 인스턴스 생성 (볼륨 사이즈 50GB로 상향)
-print("💻 인스턴스 생성 시작 (볼륨 사이즈 상향)...")
-
+# 6. 인스턴스 생성 (50GB 볼륨)
+print("💻 [3/4] 인스턴스 생성 요청 중 (50GB 볼륨)...")
 server_payload = {
     "server": {
-        "name": "final-stable-server",
-        "imageRef": "7342b6e2-74d6-4d2c-a65c-90242d1ee218",
-        "flavorRef": "a4b6a0f7-aeff-4d78-a8d5-7de9f007012d",
-        "key_name": "vm1-key",
+        "name": "final-backup-server",
+        "imageRef": IMAGE_ID,
+        "flavorRef": FLAVOR_ID,
+        "key_name": KEY_NAME,
         "networks": [{"uuid": vpc_id, "subnet": subnet_id}],
-        "block_device_mapping_v2": [
-            {
-                "uuid": "7342b6e2-74d6-4d2c-a65c-90242d1ee218", # 이미지 ID
-                "source_type": "image",
-                "destination_type": "volume",
-                "boot_index": 0,
-                "volume_size": 50,           # 20에서 50GB로 상향 조정
-                "delete_on_termination": True
-            }
-        ],
-        "security_groups": [{"name": "default"}]
+        "security_groups": [{"name": "secure-web-sg"}],
+        "user_data": encoded_user_data,
+        "block_device_mapping_v2": [{
+            "uuid": IMAGE_ID,
+            "source_type": "image",
+            "destination_type": "volume",
+            "boot_index": 0,
+            "volume_size": 50,
+            "delete_on_termination": True
+        }]
     }
 }
 
-srv_res = requests.post(
-    f"{url_compute}/v2/{tenant_id}/servers", 
-    headers=header, 
-    json=server_payload
-)
-
-if srv_res.status_code not in [200, 202]:
-    print(f"❌ 인스턴스 생성 실패: {srv_res.status_code}")
-    print(f"상세 메시지: {srv_res.text}")
-    exit()
-
-server_id = srv_res.json()["server"]["id"]
-print(f"✅ 인스턴스 생성 요청 완료! (ID: {server_id})")
+srv_res = requests.post(f"{URL_COMPUTE}/v2/{TENANT_ID}/servers", headers=HEADER, json=server_payload).json()
+server_id = srv_res["server"]["id"]
 
 # 7. ACTIVE 대기 및 공인 IP 연결
+print("⏳ 인스턴스 활성화 대기 중...")
 while True:
-    status_res = requests.get(f"{url_compute}/v2/{tenant_id}/servers/{server_id}", headers=header)
-    status = status_res.json()["server"]["status"]
+    res = requests.get(f"{URL_COMPUTE}/v2/{TENANT_ID}/servers/{server_id}", headers=HEADER).json()
+    status = res["server"]["status"]
     if status == "ACTIVE": break
-    if status == "ERROR":
-        print("❌ 인스턴스가 ERROR 상태입니다.")
-        exit()
+    if status == "ERROR": exit("❌ 인스턴스 생성 오류 발생")
     time.sleep(5)
 
-# 7. 공인 IP(Floating IP) 할당 및 연결 (인스턴스 생성 완료 후 마지막 작업)
-print("🔗 공인 IP 할당 및 인스턴스 연결 중...")
-fip_res = requests.post(f"{url_network}/floatingips", headers=header, json={"floatingip": {"floating_network_id": pub_id}}).json()
-fip_id = fip_res["floatingip"]["id"]
-fip_addr = fip_res["floatingip"]["floating_ip_address"]
+print("🔗 [4/4] 공인 IP 할당 및 인스턴스 포트 연결 중...")
+fip = requests.post(f"{URL_NETWORK}/floatingips", headers=HEADER, 
+                    json={"floatingip": {"floating_network_id": pub_net_id}}).json()["floatingip"]
+fip_addr = fip["floating_ip_address"]
 
-# 인스턴스의 포트 ID 확인 후 바인딩
-time.sleep(3) # 포트 생성 시간 대기
-ports = requests.get(f"{url_network}/ports?device_id={server_id}", headers=header).json()["ports"]
+# 포트 ID 조회 후 Floating IP 바인딩
+time.sleep(3)
+ports = requests.get(f"{URL_NETWORK}/ports?device_id={server_id}", headers=HEADER).json()["ports"]
 if ports:
-    port_id = ports[0]["id"]
-    requests.put(f"{url_network}/floatingips/{fip_id}", headers=header, json={"floatingip": {"port_id": port_id}})
-    print(f"🚀 배포 성공! 공인 IP: {fip_addr}")
-else:
-    print("❌ 포트를 찾을 수 없습니다.")
+    requests.put(f"{URL_NETWORK}/floatingips/{fip['id']}", headers=HEADER, json={"floatingip": {"port_id": ports[0]["id"]}})
+    print("-" * 50)
+    print(f"🚀 배포가 성공적으로 완료되었습니다!")
+    print(f"🌐 접속 URL: http://{fip_addr}")
+    print(f"🔐 SSH 접속: ssh ubuntu@{fip_addr}")
+    print("-" * 50)
