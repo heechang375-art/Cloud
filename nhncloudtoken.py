@@ -3,6 +3,7 @@ import json
 import datetime
 from dotenv import load_dotenv # type: ignore
 import os
+import random
 
 load_dotenv()
 os.path.exists(".env")
