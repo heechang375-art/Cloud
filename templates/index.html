@@ -1,123 +1,196 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
-    <title>NHN Cloud Smart Deployer</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NHN Cloud 자동 배포 시스템</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; padding-top: 30px; font-family: 'Malgun Gothic', sans-serif; }
+        .container { max-width: 900px; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
+        .card { border: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); margin-bottom: 20px; }
+        .card-header { font-weight: bold; }
+        .loading { display: none; text-align: center; margin-top: 20px; }
+    </style>
 </head>
-<body class="container mt-5 bg-light">
-    <div class="card shadow p-4 mx-auto" style="max-width: 800px;">
-        <h3 class="text-center mb-4">☁️ NHN Cloud 인프라 자동화 도구</h3>
-        
-        <form action="/deploy" method="post" id="deployForm">
+<body>
+
+<div class="container">
+    <h2 class="text-center mb-4">🚀 NHN Cloud 인스턴스 자동 배포</h2>
+
+    <div class="card">
+        <div class="card-header bg-dark text-white">1. 계정 인증 및 리전 선택</div>
+        <div class="card-body">
             <div class="row g-3">
-                <div class="col-md-4">
-                    <label class="form-label">리전 선택</label>
-                    <select name="region" id="region" class="form-select">
+                <div class="col-md-6"><input type="text" id="user_id" class="form-control" placeholder="아이디(Email)"></div>
+                <div class="col-md-6"><input type="password" id="password" class="form-control" placeholder="비밀번호"></div>
+                <div class="col-md-6"><input type="text" id="tenant_id" class="form-control" placeholder="테넌트 ID"></div>
+                <div class="col-md-6">
+                    <select id="region" class="form-select">
                         <option value="KR1">한국(판교) - KR1</option>
                         <option value="KR2">한국(평촌) - KR2</option>
+                        <option value="JP1">일본 - JP1</option>
+                        <option value="US1">미국 - US1</option>
                     </select>
                 </div>
-                <div class="col-md-4">
-                    <label class="form-label">API ID</label>
-                    <input type="text" name="user_id" id="user_id" class="form-control" required>
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Password</label>
-                    <div class="input-group">
-                        <input type="password" name="password" id="password" class="form-control" required>
-                        <button type="button" class="btn btn-outline-secondary" onclick="loadTenants()">인증</button>
-                    </div>
-                </div>
-
-                <hr>
-
-                <div class="col-md-6">
-                    <label class="form-label">프로젝트(테넌트)</label>
-                    <select name="tenant_id" id="tenant_select" class="form-select" onchange="loadResources()" disabled></select>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">필요 호스트 수</label>
-                    <input type="number" name="host_count" class="form-control" value="20">
-                </div>
-
-                <div class="col-md-12">
-                    <label class="form-label">OS 이미지</label>
-                    <select name="image_id" id="image_select" class="form-select" disabled></select>
-                </div>
-                <div class="col-md-12">
-                    <label class="form-label">인스턴스 사양</label>
-                    <select name="flavor_id" id="flavor_select" class="form-select" disabled></select>
-                </div>
-
-                <div class="col-md-12">
-                    <label class="form-label">서버 이름</label>
-                    <input type="text" name="server_name" class="form-control" value="web-server-auto">
+                <div class="col-12 text-end">
+                    <button class="btn btn-primary px-5" onclick="getResources()">연결 및 자원 조회</button>
                 </div>
             </div>
-
-            <button type="submit" class="btn btn-primary w-100 mt-4 btn-lg">🚀 인프라 배포 시작</button>
-        </form>
+        </div>
     </div>
-    <script>
-        async function loadTenants() {
-    const data = {
-        region: document.getElementById('region').value,
-        user_id: document.getElementById('user_id').value,
-        password: document.getElementById('password').value
-    };
 
-    const res = await fetch('/get_tenants', {
-        method: 'POST', 
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
+    <div id="deploy-section" style="display:none;">
+        <div class="card">
+            <div class="card-header bg-success text-white">2. 서버 구성 및 SSH 키 설정</div>
+            <div class="card-body">
+                <form id="deploy-form">
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label">인스턴스 이름</label>
+                            <input type="text" name="server_name" class="form-control" value="api-web-server">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">OS 이미지</label>
+                            <select id="image_id" name="image_id" class="form-select"></select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">인스턴스 사양 (Flavor)</label>
+                            <select id="flavor_id" name="flavor_id" class="form-select"></select>
+                        </div>
 
-    if (res.ok) {
-        const result = await res.json();
-        
-        // 1. 프로젝트(테넌트) 반복문
-        const tSel = document.getElementById('tenant_select');
-        tSel.innerHTML = ""; // 초기화
-        result.tenants.forEach(t => {
-            const opt = document.createElement('option');
-            opt.value = t.id;
-            opt.textContent = t.name;
-            tSel.appendChild(opt);
-        });
-        tSel.disabled = false;
+                        <div class="col-md-12 mb-4">
+                            <label class="form-label fw-bold text-primary">SSH 키 페어 관리</label>
+                            <select id="keypair-select" name="selected_key_name" class="form-select" onchange="toggleKeyUpload()">
+                                <option value="CREATE_NEW">🆕 새 키 페어 자동 생성</option>
+                                </select>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-success w-100 py-3 fw-bold" onclick="deploy()">🚀 인스턴스 배포 시작</button>
+                </form>
+            </div>
+        </div>
+    </div>
 
-        // 2. OS 이미지 반복문
-        const iSel = document.getElementById('image_select');
-        iSel.innerHTML = '<option value="">-- 이미지 선택 --</option>';
-        if (result.images && result.images.length > 0) {
-            result.images.forEach(img => {
-                const opt = document.createElement('option');
-                opt.value = img.id;
-                opt.textContent = img.name;
-                iSel.appendChild(opt);
-            });
-            iSel.disabled = false;
-        }
+    <div class="loading" id="loader">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 fw-bold" id="loader-msg">데이터 처리 중...</p>
+    </div>
 
-        // 3. 인스턴스 사양 반복문
-        const fSel = document.getElementById('flavor_select');
-        fSel.innerHTML = '<option value="">-- 사양 선택 --</option>';
-        if (result.flavors && result.flavors.length > 0) {
-            result.flavors.forEach(flv => {
-                const opt = document.createElement('option');
-                opt.value = flv.id;
-                opt.textContent = `${flv.name} (vCPU: ${flv.vcpus}, RAM: ${flv.ram}MB)`;
-                fSel.appendChild(opt);
-            });
-            fSel.disabled = false;
-        }
+    <div id="result-area" style="display:none;" class="mt-4">
+        <div class="alert alert-info shadow-sm">
+            <h4 class="alert-heading">✨ 배포 완료!</h4>
+            <hr>
+            <p>공인 IP 주소: <strong class="fs-4 text-primary" id="res-ip"></strong></p>
+            <p>사용된 키 이름: <span class="badge bg-dark" id="res-key"></span></p>
+            
+            <div id="download-area" style="display:none;" class="mt-3 p-3 bg-white border border-info rounded">
+                <p class="text-danger fw-bold mb-2">⚠️ 새 개인키가 생성되었습니다. 파일을 다운로드하여 안전하게 보관하세요!</p>
+                <button class="btn btn-primary w-100" onclick="downloadPem()">💾 .pem 개인키 다운로드</button>
+            </div>
+        </div>
+    </div>
+</div>
 
-        alert("✅ 모든 목록을 불러왔습니다!");
-    } else {
-        alert("❌ 실패! API 정보를 확인하세요.");
+<script>
+    let authData = {}; 
+    let generatedKeyData = "";
+    let generatedKeyName = "";
+
+    function toggleKeyUpload() {
+        const val = document.getElementById('keypair-select').value;
+        document.getElementById('key-upload-div').style.display = (val === 'CREATE_NEW') ? 'block' : 'none';
     }
-}
-    </script>
-    
+
+    async function getResources() {
+        const loader = document.getElementById('loader');
+        loader.style.display = 'block';
+        
+        authData = {
+            region: document.getElementById('region').value,
+            user_id: document.getElementById('user_id').value,
+            password: document.getElementById('password').value,
+            tenant_id: document.getElementById('tenant_id').value
+        };
+
+        try {
+            const res = await fetch('/get_resources', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(authData)
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            // 이미지/사양 채우기
+            document.getElementById('image_id').innerHTML = data.images.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+            document.getElementById('flavor_id').innerHTML = data.flavors.map(f => `<option value="${f.id}">${f.name} (vCPU:${f.vcpus}, RAM:${f.ram}MB)</option>`).join('');
+
+            // 키 페어 목록 채우기 (기존 vm1-key 등)
+            const kpSel = document.getElementById('keypair-select');
+            kpSel.innerHTML = '<option value="CREATE_NEW">🆕 새 키 페어 자동 생성 (추천)</option>';
+            data.keypairs.forEach(item => {
+                kpSel.innerHTML += `<option value="${item.keypair.name}">${item.keypair.name}</option>`;
+            });
+
+            document.getElementById('deploy-section').style.display = 'block';
+            alert(`${authData.region} 리전 연결 성공!`);
+        } catch (e) {
+            alert("연결 실패: " + e.message);
+        } finally {
+            loader.style.display = 'none';
+        }
+    }
+
+    async function deploy() {
+        const loader = document.getElementById('loader');
+        const loaderMsg = document.getElementById('loader-msg');
+        loader.style.display = 'block';
+        loaderMsg.innerText = "인프라 구축 중... (약 1~2분 소요)";
+
+        const formData = new FormData(document.getElementById('deploy-form'));
+        for (let key in authData) { formData.append(key, authData[key]); }
+
+        try {
+            const res = await fetch('/deploy', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            const result = data.result;
+            document.getElementById('result-area').style.display = 'block';
+            document.getElementById('res-ip').innerText = result.floating_ip;
+            document.getElementById('res-key').innerText = result.key_name;
+
+            // 서버가 생성한 개인키가 있는 경우 다운로드 버튼 활성화
+            if (result.private_key) {
+                generatedKeyData = result.private_key;
+                generatedKeyName = result.key_name;
+                document.getElementById('download-area').style.display = 'block';
+            } else {
+                document.getElementById('download-area').style.display = 'none';
+            }
+
+            alert("배포가 완료되었습니다!");
+            window.scrollTo(0, document.body.scrollHeight);
+        } catch (e) {
+            alert("배포 실패: " + e.message);
+        } finally {
+            loader.style.display = 'none';
+        }
+    }
+
+    function downloadPem() {
+        const blob = new Blob([generatedKeyData], { type: 'text/plain' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${generatedKeyName}.pem`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    }
+</script>
+
 </body>
 </html>
