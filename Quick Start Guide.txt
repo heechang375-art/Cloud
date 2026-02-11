@@ -1,0 +1,24 @@
+## 🚀 퀵 스타트 가이드
+git clone [https://github.com/본인아이디/본인저장소이름.git](https://github.com/본인아이디/본인저장소이름.git)
+cd 본인저장소이름
+
+환경설정및 패키지설치 순서및 OS별 명령어
+# 1. 가상환경 생성
+# 2. 가상환경 활성화
+# 3. 패키지 일괄 설치
+[ Windows ] - 명령 프롬프트(CMD) 또는 PowerShell
+python -m venv venv
+PowerShell (VS Code 기본 터미널): ```powershell .\venv\Scripts\activate
+*💡 만약 "스크립트 실행 권한" 에러가 발생하면 다음을 먼저 입력하세요:*
+`Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+명령 프롬프트 (CMD)
+call venv\Scripts\activate
+pip install -r requirements.txt
+
+* Windows 사용자는 start.bat 더블클릭하면 자동으로 실행됩니다.
+[ Mac / Linux ] - 터미널(Terminal)
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python app.py

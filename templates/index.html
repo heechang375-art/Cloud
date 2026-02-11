@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>NHN Cloud Infra Deployer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f4f7f6; padding: 40px; font-family: 'Malgun Gothic', sans-serif; }
+        .container { max-width: 1000px; background: white; padding: 40px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .section-title { font-weight: bold; border-left: 5px solid #0d6efd; padding-left: 12px; margin: 25px 0 15px; color: #333; }
+        .log-window { background: #1a1a1a; color: #00ff00; padding: 15px; border-radius: 8px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.9rem; border: 1px solid #333; }
+        #loading_overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; color: white; }
+        .final-display { background: #f8f9fa; border: 2px solid #0d6efd; border-radius: 10px; padding: 20px; text-align: center; }
+        .readonly-input { background-color: #e9ecef !important; color: #6c757d; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<!-- VPC 중복 선택 모달 -->
+<div id="vpc_duplicate_modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10000; justify-content:center; align-items:center;">
+    <div style="background:white; padding:30px; border-radius:15px; max-width:500px; text-align:center; box-shadow:0 10px 50px rgba(0,0,0,0.3);">
+        <h4 class="text-warning">⚠️ VPC 이름 중복</h4>
+        <p class="mt-3">같은 이름의 VPC가 이미 존재합니다:<br><strong id="duplicate_vpc_name"></strong></p>
+        <div class="d-grid gap-2 mt-4">
+            <button class="btn btn-success btn-lg" onclick="handleVpcDuplicate('use_existing')">
+                ✅ 기존 VPC 사용하기
+            </button>
+            <button class="btn btn-primary btn-lg" onclick="handleVpcDuplicate('create_new')">
+                ➕ 타임스탬프 추가해서 새로 만들기
+            </button>
+            <button class="btn btn-secondary" onclick="handleVpcDuplicate('cancel')">
+                ❌ 취소
+            </button>
+        </div>
+    </div>
+</div>
+
+<div id="loading_overlay">
+    <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;"></div>
+    <h3 id="loading_text" class="mt-4">인프라 분석 및 배포 중...</h3>
+    <div class="log-window mt-3" id="log_viewer" style="width: 80%; max-width: 700px;"></div>
+</div>
+
+<div class="container">
+    <h2 class="text-center mb-5 fw-bold text-primary">NHN Cloud Infra Auto-Deploy</h2>
+
+    <div class="card p-4 mb-4 border-0 shadow-sm bg-light">
+        <div class="section-title">1. 계정 인증 및 리전</div>
+        <form id="auth-form" class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label fw-bold">서비스 리전</label>
+                <select class="form-select" id="region">
+                    <option value="KR1">한국(판교) - KR1</option>
+                    <option value="KR2">한국(평촌) - KR2</option>
+                    <option value="JP1">일본(도쿄) - JP1</option>
+                    <option value="US1">미국(캘리포니아) - US1</option>
+                </select>
+            </div>
+            <div class="col-md-6"><label class="form-label fw-bold">Tenant ID</label><input type="text" id="tenant_id" class="form-control" placeholder="콘솔에서 확인"></div>
+            <div class="col-md-6"><label class="form-label fw-bold">ID (Email)</label><input type="email" id="user_id" class="form-control"></div>
+            <div class="col-md-6"><label class="form-label fw-bold">API Password</label><input type="password" id="password" class="form-control"></div>
+            <div class="col-12 text-end"><button type="button" class="btn btn-primary px-5" onclick="getResources()">자원 동기화</button></div>
+        </form>
+    </div>
+
+    <div id="deploy-section" style="display:none;">
+        <form id="deploy-form">
+            <input type="hidden" name="pub_id" id="hidden_pub_id">
+            <input type="hidden" name="subnet_cidr" id="hidden_subnet_cidr">
+            <input type="hidden" name="vpc_cidr" id="hidden_vpc_cidr">
+
+            <div class="card p-4 mb-4 border-1">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="section-title">2. 인프라 상세 구성</div>
+                    <div class="btn-group">
+                        <input type="radio" class="btn-check" name="mode" id="m_auto" value="m_auto" checked onchange="updateUI()">
+                        <label class="btn btn-outline-success" for="m_auto">기존 VPC</label>
+                        <input type="radio" class="btn-check" name="mode" id="m_new" value="m_new" onchange="updateUI()">
+                        <label class="btn btn-outline-primary" for="m_new">신규 VPC</label>
+                    </div>
+                </div>
+
+                <div id="vpc_select_area" class="mb-4">
+                    <label class="fw-bold">기존 VPC 선택 
+                        <button type="button" class="btn btn-sm btn-outline-primary ms-2" onclick="refreshVpcs()" title="VPC 목록 새로고침">
+                            🔄
+                        </button>
+                    </label>
+                    <select id="v_sel" name="selected_vpc_id" class="form-select" onchange="calculateNetwork()"></select>
+                </div>
+                <div id="vpc_input_area" class="mb-4" style="display:none;">
+                    <label class="fw-bold">신규 VPC CIDR</label>
+                    <input type="text" id="custom_vpc_cidr" class="form-control" value="10.0.0.0/16" onkeyup="calculateNetwork()">
+                    <small class="text-muted">
+                        권장 범위: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (Private IP 대역)<br>
+                        Prefix: /16 ~ /28 사용 가능
+                    </small>
+                </div>
+
+                <div class="row g-3 mb-4">
+                    <div class="col-md-4">
+                        <label class="fw-bold">3rd Octet (입력)</label>
+                        <input type="number" id="third_octet" class="form-control" value="0" min="0" max="255" oninput="calculateNetwork()">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="fw-bold text-primary">Prefix Mask</label>
+                        <select id="mask_select" class="form-select" onchange="updateFourthOctetOptions()">
+                            <option value="24">/24 (가용 251개)</option>
+                            <option value="25">/25 (가용 123개)</option>
+                            <option value="26">/26 (가용 59개)</option>
+                            <option value="27">/27 (가용 27개)</option>
+                            <option value="28">/28 (가용 11개)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="fw-bold text-danger">4th Octet (시작 주소)</label>
+                        <select id="fourth_octet_select" class="form-select" onchange="calculateNetwork()"></select>
+                    </div>
+                </div>
+
+                <div class="final-display mb-4">
+                    <div class="small text-muted">최종 배포 CIDR 대역</div>
+                    <b id="display_cidr" class="fs-2 text-primary">10.0.0.0/24</b>
+                    <div class="small text-muted mt-2">
+                        ✓ Subnet은 반드시 VPC CIDR 범위 내에 있어야 합니다<br>
+                        ✓ 예: VPC가 10.0.0.0/16이면 → Subnet은 10.0.X.X/24~28 가능
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="fw-bold">서버 이름</label>
+                        <input type="text" id="server_name" name="server_name" class="form-control" value="web-svr-01" oninput="syncKeyName()">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="fw-bold">볼륨 크기 (GB)</label>
+                        <input type="number" id="vol_size" name="volume_size" class="form-control" value="50">
+                    </div>
+                    <div class="col-md-6"><label class="fw-bold">이미지</label><select id="img_sel" name="image_id" class="form-select"></select></div>
+                    <div class="col-md-6"><label class="fw-bold">Flavor</label><select id="fla_sel" name="flavor_id" class="form-select"></select></div>
+                    <div class="col-12">
+                        <label class="fw-bold text-success">키페어 설정
+                            <button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="refreshKeypairs()" title="키페어 목록 새로고침">
+                                🔄
+                            </button>
+                        </label>
+                        <select id="key_sel" name="selected_key_name" class="form-select" onchange="toggleKeyInput()">
+                            <option value="new">🆕 신규 키페어 생성 (이름 자동 동기화)</option>
+                        </select>
+                        <div id="new_key_area" class="mt-2">
+                            <input type="text" id="custom_key_name" name="custom_key_name" class="form-control" placeholder="키페어 이름">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-success w-100 py-3 fw-bold fs-4" onclick="runDeploy()">인프라 배포 시작</button>
+        </form>
+    </div>
+
+    <div id="final_res_area" class="final-display mt-4" style="display:none;"></div>
+</div>
+
+<script>
+    /* [UI 로직] 4번째 옥탯을 마스크에 맞게 동적 생성 (0, 128 등) */
+    function updateFourthOctetOptions() {
+        const mask = parseInt(document.getElementById('mask_select').value);
+        const fourthSel = document.getElementById('fourth_octet_select');
+        fourthSel.innerHTML = '';
+
+        const step = Math.pow(2, 32 - mask);
+        // /24일 경우 step이 256이 되므로 한 번만 실행됨
+        for (let i = 0; i < 256; i += step) {
+            let opt = document.createElement('option');
+            opt.value = i; opt.innerText = i;
+            fourthSel.appendChild(opt);
+        }
+        calculateNetwork();
+    }
+
+    /* [기능] 서버 이름 변경 시 키페어 이름 자동 제안 */
+    function syncKeyName() {
+        const sName = document.getElementById('server_name').value;
+        if(document.getElementById('key_sel').value === 'new') {
+            document.getElementById('custom_key_name').value = sName + "-key";
+        }
+    }
+
+    function toggleKeyInput() {
+        const isNew = document.getElementById('key_sel').value === 'new';
+        document.getElementById('new_key_area').style.display = isNew ? 'block' : 'none';
+        if(isNew) syncKeyName();
+    }
+
+    function updateUI() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        document.getElementById('vpc_input_area').style.display = (mode === 'm_new') ? 'block' : 'none';
+        document.getElementById('vpc_select_area').style.display = (mode === 'm_new') ? 'none' : 'block';
+        
+        // 볼륨 크기는 항상 변경 가능 (기존 제약 제거)
+        const vol = document.getElementById('vol_size');
+        vol.readOnly = false; 
+        vol.classList.remove('readonly-input');
+        
+        calculateNetwork();
+    }
+
+    /* [네트워크] CIDR 실시간 계산 */
+    function calculateNetwork() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const third = document.getElementById('third_octet').value || 0;
+        const fourth = document.getElementById('fourth_octet_select').value || 0;
+        const mask = document.getElementById('mask_select').value;
+        
+        let baseIp = "10.0.0.0";
+        let vpcCidr = "10.0.0.0/16";
+        
+        if(mode === 'm_new') {
+            vpcCidr = document.getElementById('custom_vpc_cidr').value;
+            baseIp = vpcCidr.split('/')[0];
+        } else {
+            const vSelect = document.getElementById('v_sel');
+            if(vSelect.options.length > 0) {
+                const text = vSelect.options[vSelect.selectedIndex].text;
+                const match = text.match(/\((.*?)\)/);
+                if(match) {
+                    vpcCidr = match[1];
+                    baseIp = vpcCidr.split('/')[0];
+                }
+            }
+        }
+
+        const seg = baseIp.split('.');
+        const finalCidr = `${seg[0]}.${seg[1]}.${third}.${fourth}/${mask}`;
+        
+        // CIDR 검증
+        const isValid = validateSubnetCidr(finalCidr, vpcCidr);
+        const displayElem = document.getElementById('display_cidr');
+        const deployBtn = document.querySelector('button[onclick="runDeploy()"]');
+        
+        if(isValid) {
+            displayElem.innerText = finalCidr;
+            displayElem.style.color = '#0d6efd';
+            deployBtn.disabled = false;
+            deployBtn.classList.remove('btn-secondary');
+            deployBtn.classList.add('btn-success');
+        } else {
+            displayElem.innerText = `${finalCidr} ⚠️ VPC 범위 벗어남!`;
+            displayElem.style.color = '#dc3545';
+            deployBtn.disabled = true;
+            deployBtn.classList.remove('btn-success');
+            deployBtn.classList.add('btn-secondary');
+        }
+        
+        document.getElementById('hidden_subnet_cidr').value = finalCidr;
+        document.getElementById('hidden_vpc_cidr').value = vpcCidr;
+    }
+    
+    /* [검증] Subnet CIDR이 VPC CIDR 범위 내에 있는지 확인 */
+    function validateSubnetCidr(subnetCidr, vpcCidr) {
+        try {
+            // CIDR을 IP와 prefix로 분리
+            const [subnetIp, subnetPrefix] = subnetCidr.split('/');
+            const [vpcIp, vpcPrefix] = vpcCidr.split('/');
+            
+            const subnetPrefixNum = parseInt(subnetPrefix);
+            const vpcPrefixNum = parseInt(vpcPrefix);
+            
+            // Subnet prefix는 VPC prefix보다 크거나 같아야 함 (더 작은 범위)
+            if(subnetPrefixNum < vpcPrefixNum) return false;
+            
+            // IP를 32bit 정수로 변환
+            const ipToInt = (ip) => {
+                return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
+            };
+            
+            const subnetInt = ipToInt(subnetIp);
+            const vpcInt = ipToInt(vpcIp);
+            
+            // VPC의 네트워크 마스크 생성
+            const vpcMask = (~0 << (32 - vpcPrefixNum)) >>> 0;
+            
+            // 두 IP의 네트워크 부분이 같은지 확인
+            return (subnetInt & vpcMask) === (vpcInt & vpcMask);
+        } catch(e) {
+            return false;
+        }
+    }
+
+    /* [API] 리소스 조회 및 초기 로딩 */
+    let currentAuthData = null; // 인증 정보 저장
+    
+    async function getResources() {
+        const overlay = document.getElementById('loading_overlay');
+        overlay.style.display = 'flex';
+        document.getElementById('loading_text').innerText = "리소스 조회 중...";
+
+        const authData = {
+            region: document.getElementById('region').value,
+            tenant_id: document.getElementById('tenant_id').value,
+            user_id: document.getElementById('user_id').value,
+            password: document.getElementById('password').value
+        };
+        
+        currentAuthData = authData; // 저장
+
+        try {
+            const res = await fetch('/get_resources', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify(authData) 
+            });
+            const data = await res.json();
+            if(data.status === 'error') throw new Error(data.error);
+
+            document.getElementById('v_sel').innerHTML = data.vpcs.map(v => `<option value="${v.id}">${v.name} (${v.cidrv4})</option>`).join('');
+            document.getElementById('img_sel').innerHTML = data.images.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+            document.getElementById('fla_sel').innerHTML = data.flavors.map(f => `<option value="${f.id}">${f.name} (vCPU:${f.vcpus}/RAM:${f.ram})</option>`).join('');
+            document.getElementById('key_sel').innerHTML = '<option value="new">🆕 신규 키페어 생성</option>' + 
+                data.keypairs.map(k => `<option value="${k.keypair.name}">${k.keypair.name}</option>`).join('');
+            
+            document.getElementById('hidden_pub_id').value = data.pub_id;
+            document.getElementById('deploy-section').style.display = 'block';
+            
+            updateFourthOctetOptions();
+            updateUI(); 
+            toggleKeyInput();
+        } catch(e) { 
+            alert("동기화 에러: " + e.message); 
+        } finally { 
+            overlay.style.display = 'none'; 
+        }
+    }
+    
+    /* [개별 새로고침] VPC 목록만 새로고침 */
+    async function refreshVpcs() {
+        if(!currentAuthData) {
+            alert("먼저 '자원 동기화'를 실행해주세요.");
+            return;
+        }
+        
+        try {
+            const res = await fetch('/get_resources', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify(currentAuthData) 
+            });
+            const data = await res.json();
+            if(data.status === 'error') throw new Error(data.error);
+            
+            document.getElementById('v_sel').innerHTML = data.vpcs.map(v => `<option value="${v.id}">${v.name} (${v.cidrv4})</option>`).join('');
+            calculateNetwork();
+            alert("✅ VPC 목록 업데이트 완료");
+        } catch(e) {
+            alert("VPC 새로고침 실패: " + e.message);
+        }
+    }
+    
+    /* [개별 새로고침] 키페어 목록만 새로고침 */
+    async function refreshKeypairs() {
+        if(!currentAuthData) {
+            alert("먼저 '자원 동기화'를 실행해주세요.");
+            return;
+        }
+        
+        try {
+            const res = await fetch('/get_resources', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify(currentAuthData) 
+            });
+            const data = await res.json();
+            if(data.status === 'error') throw new Error(data.error);
+            
+            document.getElementById('key_sel').innerHTML = '<option value="new">🆕 신규 키페어 생성</option>' + 
+                data.keypairs.map(k => `<option value="${k.keypair.name}">${k.keypair.name}</option>`).join('');
+            toggleKeyInput();
+            alert("✅ 키페어 목록 업데이트 완료");
+        } catch(e) {
+            alert("키페어 새로고침 실패: " + e.message);
+        }
+    }
+    
+    /* [VPC 중복 처리] 사용자 선택 처리 */
+    let vpcDuplicateResolver = null;
+    
+    function handleVpcDuplicate(action) {
+        const modal = document.getElementById('vpc_duplicate_modal');
+        modal.style.display = 'none';
+        
+        if(action === 'cancel') {
+            if(vpcDuplicateResolver) {
+                vpcDuplicateResolver.reject("사용자 취소");
+            }
+            document.getElementById('loading_overlay').style.display = 'none';
+        } else {
+            if(vpcDuplicateResolver) {
+                vpcDuplicateResolver.resolve(action);
+            }
+        }
+    }
+
+    /* [API] 배포 실행 및 로그 출력 */
+    async function runDeploy() {
+        const overlay = document.getElementById('loading_overlay');
+        const logBox = document.getElementById('log_viewer');
+        overlay.style.display = 'flex'; 
+        logBox.innerHTML = "";
+
+        const fd = new FormData(document.getElementById('deploy-form'));
+        ['region','tenant_id','user_id','password'].forEach(k => {
+            const val = document.getElementById(k).value;
+            if(!val) return alert(k + " 값이 누락되었습니다.");
+            fd.append(k, val);
+        });
+
+        try {
+            const response = await fetch('/deploy', { method: 'POST', body: fd });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while(true) {
+                const { value, done } = await reader.read();
+                if(done) break;
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                
+                for(const line of lines) {
+                    if(!line.startsWith('data: ')) continue;
+                    let data;
+                    try {
+                        data = JSON.parse(line.substring(6));
+                    } catch(e) { continue; }
+
+                    if(data.type === 'progress') {
+                        document.getElementById('loading_text').innerText = data.msg;
+                        logBox.innerHTML += `<div style="color: #00ff00;">> ${data.msg}</div>`;
+                        logBox.scrollTop = logBox.scrollHeight;
+                    } 
+                    else if(data.type === 'result') {
+                        overlay.style.display = 'none';
+                        renderFinal(data.payload);
+                        return;
+                    } 
+                    else if(data.type === 'vpc_duplicate') {
+                        // VPC 중복 감지 - 사용자에게 선택 요청
+                        document.getElementById('duplicate_vpc_name').innerText = data.payload.vpc_name;
+                        const modal = document.getElementById('vpc_duplicate_modal');
+                        modal.style.display = 'flex';
+                        
+                        // Promise로 사용자 선택 대기
+                        const userChoice = await new Promise((resolve, reject) => {
+                            vpcDuplicateResolver = { resolve, reject };
+                        });
+                        
+                        // 사용자 선택을 FormData에 추가하고 재시도
+                        fd.append('vpc_duplicate_action', userChoice);
+                        
+                        // 재귀 호출 대신 새로운 요청
+                        logBox.innerHTML += `<div style="color: #ffaa00;">> 사용자 선택: ${userChoice === 'use_existing' ? '기존 VPC 사용' : '새 이름으로 생성'}</div>`;
+                        
+                        const retryResponse = await fetch('/deploy', { method: 'POST', body: fd });
+                        const retryReader = retryResponse.body.getReader();
+                        
+                        // 재시도 스트림 처리 (중복 코드 방지를 위해 동일 로직)
+                        while(true) {
+                            const { value: retryValue, done: retryDone } = await retryReader.read();
+                            if(retryDone) break;
+                            const retryChunk = decoder.decode(retryValue);
+                            const retryLines = retryChunk.split('\n');
+                            
+                            for(const retryLine of retryLines) {
+                                if(!retryLine.startsWith('data: ')) continue;
+                                let retryData;
+                                try {
+                                    retryData = JSON.parse(retryLine.substring(6));
+                                } catch(e) { continue; }
+                                
+                                if(retryData.type === 'progress') {
+                                    document.getElementById('loading_text').innerText = retryData.msg;
+                                    logBox.innerHTML += `<div style="color: #00ff00;">> ${retryData.msg}</div>`;
+                                    logBox.scrollTop = logBox.scrollHeight;
+                                } 
+                                else if(retryData.type === 'result') {
+                                    overlay.style.display = 'none';
+                                    renderFinal(retryData.payload);
+                                    return;
+                                } 
+                                else if(retryData.type === 'error') {
+                                    logBox.innerHTML += `<div style="color: #ff4444; font-weight: bold;">! 최종 에러: ${retryData.msg}</div>`;
+                                    setTimeout(() => {
+                                        overlay.style.display = 'none';
+                                        alert("배포 중단: " + retryData.msg);
+                                    }, 2000);
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    } 
+                    else if(data.type === 'error') {
+                        logBox.innerHTML += `<div style="color: #ff4444; font-weight: bold;">! 최종 에러: ${data.msg}</div>`;
+                        setTimeout(() => {
+                            overlay.style.display = 'none';
+                            alert("배포 중단: " + data.msg);
+                        }, 2000);
+                        return;
+                    }
+                }
+            }
+        } catch(e) { 
+            overlay.style.display = 'none'; 
+            alert("서버 연결에 실패했습니다."); 
+        }
+    }
+
+    function renderFinal(res) {
+        const area = document.getElementById('final_res_area');
+        area.style.display = 'block';
+        area.innerHTML = `
+            <h3>🚀 인프라 구축 성공</h3>
+            <p class="fs-4">Public IP: <b>${res.floating_ip}</b></p>
+            ${res.private_key ? `<button id="download_btn" class="btn btn-warning fw-bold">키페어(.pem) 저장</button>` : ''}
+        `;
+        if(res.private_key) {
+            document.getElementById('download_btn').onclick = () => {
+                const blob = new Blob([res.private_key], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = `${res.key_name}.pem`; a.click();
+            };
+        }
+    }
+</script>
+</body>
+</html>
